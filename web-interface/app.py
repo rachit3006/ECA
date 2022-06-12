@@ -1,6 +1,8 @@
 from copyreg import pickle
+import pyfeat_model
 import os
-from flask import Flask, render_template, Response
+from flask import Flask, render_template, Response, request
+from PIL import Image
 from flask_socketio import SocketIO
 from keras.models import load_model
 from time import sleep
@@ -57,14 +59,52 @@ def gen_frames():
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
-
-@app.route('/openface', methods=['GET'])
+@app.route('/', methods=['GET'])
 def index():
-    return render_template('openface.html')
+    return render_template('index.html')
 
-@app.route('/mediapipe', methods=['GET'])
-def video_feed():
-    return Response(gen_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+@app.route('/image', methods=['POST'])
+def image():
+ 
+    try:
+        image_file = request.files['image']  # get the image
+ 
+        # Set an image confidence threshold value to limit returned data
+        threshold = request.form.get('threshold')
+        if threshold is None:
+            threshold = 0.5
+        else:
+            threshold = float(threshold)
+ 
+        # finally run the image through tensor flow object detection`
+        image_object = Image.open(image_file)
+        img_path = os.path.join("images", "download1.jpg")
+        image_object = image_object.save(img_path)
+        objects = pyfeat_model.detect_emotion(img_path)
+        return objects
+ 
+    except Exception as e:
+        #print('POST /image error: %e' % e)
+        return e
+
+# @app.route('/openface', methods=['GET'])
+# def openface():
+#     return render_template('openface.html')
+
+# @app.route('/mediapipe', methods=['GET'])
+# def video_feed():
+#     return Response(gen_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/local')
+def local():
+    return Response(open('./static/local.html').read(), mimetype="text/html")
+
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,POST') # Put any other methods you need here
+    return response
 
 @socket.on('message')
 def on_message(msg):
@@ -76,4 +116,5 @@ def on_message(msg):
 
 
 if __name__ == '__main__':
+    # app.run(debug=True, host='0.0.0.0', ssl_context=('ssl/server.crt', 'ssl/server.key'))
     app.run(port=3000, debug=True)
