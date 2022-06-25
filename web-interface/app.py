@@ -1,6 +1,7 @@
 from copyreg import pickle
-import pyfeat_model
+import json
 import os
+from pickle import TRUE
 from flask import Flask, render_template, Response, request
 from PIL import Image
 from flask_socketio import SocketIO
@@ -11,6 +12,9 @@ from keras.preprocessing import image
 import cv2
 import numpy as np
 from tensorflow.keras.utils import img_to_array
+from feat import Detector
+
+detector = Detector()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'password'
@@ -23,41 +27,65 @@ emotion_labels = ['Angry', 'Disgust', 'Fear', 'Happy', 'Neutral', 'Sad', 'Surpri
 
 cap = cv2.VideoCapture(0)
 
-def gen_frames():  
-    while True:
-        success, frame = cap.read()  # read the camera frame
-        if not success:
-            break
-        else:
-            labels = []
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            faces = face_classifier.detectMultiScale(gray)
+def detect_emotion(img_path):
 
-            for (x, y, w, h) in faces:
-                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 255), 2)
-                roi_gray = gray[y:y + h, x:x + w]
-                roi_gray = cv2.resize(roi_gray, (48, 48), interpolation=cv2.INTER_AREA)
+    results = detector.detect_image(img_path)
 
-                if np.sum([roi_gray]) != 0:
-                    roi = roi_gray.astype('float') / 255.0
-                    roi = img_to_array(roi)
-                    roi = np.expand_dims(roi, axis=0)
+    emotions_values = {'Anger': results['anger'][0],
+                    'Disgust': results['disgust'][0],
+                    'Fear': results['fear'][0],
+                    'Happiness': results['happiness'][0],
+                    'Sadness': results['sadness'][0],
+                    'Surprise': results['surprise'][0],
+                    'Neutral': results['neutral'][0]}
 
-                    prediction = classifier.predict(roi)[0]
-                    label = emotion_labels[prediction.argmax()]
-                    label_position = (x, y)
-                    cv2.putText(frame, label, label_position, cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                else:
-                    cv2.putText(frame, 'No Faces', (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            #cv2.imshow('Emotion Detector', frame)
-            
-            ret, buffer = cv2.imencode('.jpg', frame)
-            frame = buffer.tobytes()
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-            
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+    emotion = max(emotions_values, key=lambda x: emotions_values[x])
+
+    CI = 0
+
+    if emotion=='Neutral':
+        CI = emotions_values['Neutral']*0.9
+    elif emotion=='Happiness':
+        CI = emotions_values['Happiness']*0.6
+    elif emotion=='Surprise':
+        CI = emotions_values['Surprise']*0.6
+    elif emotion=='Sadness':
+        CI = emotions_values['Sadness']*0.3
+    elif emotion=='Disgust':
+        CI = emotions_values['Disgust']*0.2
+    elif emotion=='Anger':
+        CI = emotions_values['Anger']*0.25
+    else:
+        CI = emotions_values['Fear']*0.3
+
+    if CI >= 0.5 and CI <= 1:
+        return {'Emotion':emotion, 'Engagement level': 'Engaged'}
+    else:
+        return {'Emotion':emotion, 'Engagement level': 'Not Engaged'}
+
+def gen_frames(img_path):  
+        frame = cv2.imread(img_path)
+        
+        labels = []
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = face_classifier.detectMultiScale(gray)
+
+        for (x, y, w, h) in faces:
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 255), 2)
+            roi_gray = gray[y:y + h, x:x + w]
+            roi_gray = cv2.resize(roi_gray, (48, 48), interpolation=cv2.INTER_AREA)
+
+            if np.sum([roi_gray]) != 0:
+                roi = roi_gray.astype('float') / 255.0
+                roi = img_to_array(roi)
+                roi = np.expand_dims(roi, axis=0)
+
+                prediction = classifier.predict(roi)[0]
+                label = emotion_labels[prediction.argmax()]
+                label_position = (x, y)
+                labels.append(label)
+        return labels
+        
 
 @app.route('/', methods=['GET'])
 def index():
@@ -65,10 +93,10 @@ def index():
 
 @app.route('/image', methods=['POST'])
 def image():
- 
     try:
         image_file = request.files['image']  # get the image
- 
+        counter = request.args.get('counter')
+
         # Set an image confidence threshold value to limit returned data
         threshold = request.form.get('threshold')
         if threshold is None:
@@ -80,7 +108,12 @@ def image():
         image_object = Image.open(image_file)
         img_path = os.path.join("images", "download1.jpg")
         image_object = image_object.save(img_path)
-        objects = pyfeat_model.detect_emotion(img_path)
+        objects = detect_emotion(img_path)
+        objects["counter"] = counter
+        # labels = gen_frames(img_path)
+        # answer = {}
+        # answer['Emotion'] = labels[0]
+        # answer['Engagement level'] = ""
         return objects
  
     except Exception as e:
